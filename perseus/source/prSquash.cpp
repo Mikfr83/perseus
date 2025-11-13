@@ -20,7 +20,6 @@ static const MString TYPE_NAMEMT = "prSquash";
     }
 
 // The user Context
-//const double EPSILON = 0.00001;
 const double EPSILON = 1e-4;
 
 
