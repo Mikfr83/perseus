@@ -20,7 +20,8 @@ static const MString TYPE_NAMEMT = "prSquash";
     }
 
 // The user Context
-const double EPSILON = 0.00001;
+//const double EPSILON = 0.00001;
+const double EPSILON = 1e-4;
 
 
 typedef struct
@@ -227,7 +228,7 @@ MThreadRetVal threadTask(void* data)
         envTimesWeight = sharedEnv * (*sharedWeights)[i];
         tempY = originalPos->y* (1 - localGlobalWeightVal) + pos->y* localGlobalWeightVal;
         findRamp = (tempY - bBoxMinB.y);
-        disFromLow = pos->y * localGlobalWeightVal +originalPos->y * (1 - localGlobalWeightVal) - bBoxMinB.y; 
+        disFromLow = pos->y * localGlobalWeightVal +originalPos->y * (1 - localGlobalWeightVal) - bBoxMinB.y;
         findRamp /= initialLength;
         findRampInt = int(findRamp * (rampMemValue - 1));
         if (findRampInt > (rampMemValue - 1))
@@ -257,19 +258,19 @@ MThreadRetVal threadTask(void* data)
         tempY = pos->y;
         pos->x = pos->x;
         pos->z = pos->z;
-        // stretch function 
+        // stretch function
         squashVec.x = pos->x - minusSquashVec.x;
         squashVec.y = 0.0 - minusSquashVec.y;
         squashVec.z = pos->z - minusSquashVec.z;
         if (minusUpLocPos  > EPSILON)
-        { 
+        {
         pos->y += minusUpLocPos * disFromLow * envTimesWeight * deformerValue * stretchMap[i] * stretchValue;
         }
         else
         {
             pos->y += minusUpLocPos * disFromLow * envTimesWeight * deformerValue * squashMap[i] * squashValue;
         }
-        // squash function 
+        // squash function
         squashStretchVal = lengthValSquash * expandValue * expandMap[i] * deformerValue;
         squashStretchVal += lengthValStretch * shrinkValue * shrinkMap[i] * deformerValue;
         squashStretchVal *= envTimesWeight;
@@ -278,56 +279,77 @@ MThreadRetVal threadTask(void* data)
         envBendStrength = envTimesWeight * bendStrengthVal * deformerValue;
         bendX = bendXTemp * envBendStrength;
         bendZ = bendZTemp * envBendStrength;
-        tempY = pos->y;
-        tempX = pos->x;
-        tempZ = pos->z;
 
-        if (abs(bendX) > EPSILON)
-        {
-            bendVal = pos->y - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength;
-            bendVal *= bendX;
-            scale = 1.0f / bendX;
-            bendPI = (float)PI - bendVal;
-            cosBend = cos(bendPI);
-            sinBend = sin(bendPI);
-            posX = scale * cosBend;
-            posX += scale;
-            posX -= pos->x * cosBend;
-            posY = scale * sinBend;
-            posY -= pos->x * sinBend;
-            pos->x += (posX - pos->x);
-            posY += bBoxMinB.y - (bendValue - 1) * findRamp * initialLength;
-            pos->y += (posY - pos->y) * envTimesWeight * 1.0;
+
+        // Save original positions
+        const double origX = pos->x;
+        const double origY = pos->y;
+        const double origZ = pos->z;
+
+        // Initialize deltas
+        double deltaX = 0.0;
+        double deltaY = 0.0;
+        double deltaZ = 0.0;
+
+        // Small threshold for safe linear approximation
+        //const double EPSILON = 1e-4;
+
+        // --- Bend X ---
+        if (fabs(bendX) > EPSILON) {
+            // Full bend math
+            double bendVal = (origY - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength) * bendX;
+            double scale = 1.0 / bendX;
+            double bendPI = PI - bendVal;
+            double cosBend = cos(bendPI);
+            double sinBend = sin(bendPI);
+
+            double bentX = scale * cosBend + scale - origX * cosBend;
+            double bentY = scale * sinBend - origX * sinBend + bBoxMinB.y - (bendValue - 1) * findRamp * initialLength;
+
+            deltaX += bentX - origX;
+            deltaY += bentY - origY;
         }
-        else
-        {
-            pos->y = tempY;
-            pos->x = tempX;
+        else {
+            // Tiny bend: first-order Taylor approx
+            double bendVal = (origY - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength) * bendX;
+            deltaX += -origY * bendVal;
+            deltaY += origX * bendVal;
         }
 
-        tempY = pos->y;
-        if (abs(bendZ) > EPSILON)
-        {
-            bendVal = pos->y - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength;
-            bendVal *= bendZ;
-            scale = 1.0f / bendZ;
-            bendPI = (float)PI - bendVal;
-            cosBend = cos(bendPI);
-            sinBend = sin(bendPI);
-            posZ = scale * cosBend;
-            posZ += scale;
-            posZ -= (pos->z * cosBend);
-            posY = scale * sinBend;
-            posY -= pos->z * sinBend;
-            posY += bBoxMinB.y - (bendValue - 1) * findRamp * initialLength;
-            pos->z += posZ - pos->z;
-            pos->y += (posY - pos->y) * envTimesWeight;
+        // --- Bend Z ---
+        if (fabs(bendZ) > EPSILON) {
+            double bendVal = (origY - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength) * bendZ;
+            double scale = 1.0 / bendZ;
+            double bendPI = PI - bendVal;
+            double cosBend = cos(bendPI);
+            double sinBend = sin(bendPI);
+
+            double bentZ = scale * cosBend + scale - origZ * cosBend;
+            double bentY = scale * sinBend - origZ * sinBend + bBoxMinB.y - (bendValue - 1) * findRamp * initialLength;
+
+            deltaZ += bentZ - origZ;
+            deltaY += bentY - origY;
         }
-        else
-        {
-            pos->y = tempY;
-            pos->z = tempZ;
+        else {
+            double bendVal = (origY - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength) * bendZ;
+            deltaZ += -origY * bendVal;
+            deltaY += origZ * bendVal;
         }
+
+        // --- Apply final deltas once, multiplied by envelope
+        pos->x = origX + deltaX * envTimesWeight;
+        pos->y = origY + deltaY * envTimesWeight;
+        pos->z = origZ + deltaZ * envTimesWeight;
+
+        // --- Optional: snap tiny bends to zero to remove residual jitter ---
+        if (fabs(bendX) < EPSILON * 0.1 && fabs(bendZ) < EPSILON * 0.1) {
+            pos->x = origX;
+            pos->y = origY;
+            pos->z = origZ;
+        }
+
+
+
         //convert back to local space
         * pos *= *upLocRots;
         pos->x += xMid;
