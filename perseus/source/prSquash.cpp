@@ -20,6 +20,7 @@ static const MString TYPE_NAMEMT = "prSquash";
     }
 
 // The user Context
+//const double EPSILON = 0.00001;
 const double EPSILON = 1e-4;
 
 
@@ -280,73 +281,89 @@ MThreadRetVal threadTask(void* data)
         bendZ = bendZTemp * envBendStrength;
 
 
-        // Save original positions
-        const double origX = pos->x;
-        const double origY = pos->y;
-        const double origZ = pos->z;
 
-        // Initialize deltas
-        double deltaX = 0.0;
-        double deltaY = 0.0;
-        double deltaZ = 0.0;
 
-        // Small threshold for safe linear approximation
-        //const double EPSILON = 1e-4;
 
-        // --- Bend X ---
-        if (fabs(bendX) > EPSILON) {
-            // Full bend math
-            double bendVal = (origY - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength) * bendX;
-            double scale = 1.0 / bendX;
-            double bendPI = PI - bendVal;
-            double cosBend = cos(bendPI);
-            double sinBend = sin(bendPI);
 
-            double bentX = scale * cosBend + scale - origX * cosBend;
-            double bentY = scale * sinBend - origX * sinBend + bBoxMinB.y - (bendValue - 1) * findRamp * initialLength;
 
-            deltaX += bentX - origX;
-            deltaY += bentY - origY;
-        }
-        else {
-            // Tiny bend: first-order Taylor approx
-            double bendVal = (origY - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength) * bendX;
-            deltaX += -origY * bendVal;
-            deltaY += origX * bendVal;
-        }
+        // Save original vertex position
+        double origX = pos->x;
+        double origY = pos->y;
+        double origZ = pos->z;
 
-        // --- Bend Z ---
-        if (fabs(bendZ) > EPSILON) {
-            double bendVal = (origY - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength) * bendZ;
-            double scale = 1.0 / bendZ;
-            double bendPI = PI - bendVal;
-            double cosBend = cos(bendPI);
-            double sinBend = sin(bendPI);
+        // Temporary holders
+        double newX = origX;
+        double newY = origY;
+        double newZ = origZ;
 
-            double bentZ = scale * cosBend + scale - origZ * cosBend;
-            double bentY = scale * sinBend - origZ * sinBend + bBoxMinB.y - (bendValue - 1) * findRamp * initialLength;
+        // =====================================================================
+        // Bend X
+        // =====================================================================
+        {
+            // --- inline soft blend for bendX ---------------------------------
+            double a = fabs(bendX);
+            double t = a / (a + 1e-4);     // smooth (0 → 1)
+            double bX = bendX * t;         // softened bendX value
+            // ------------------------------------------------------------------
 
-            deltaZ += bentZ - origZ;
-            deltaY += bentY - origY;
-        }
-        else {
-            double bendVal = (origY - bBoxMinB.y + (bendValue - 1) * findRamp * initialLength) * bendZ;
-            deltaZ += -origY * bendVal;
-            deltaY += origZ * bendVal;
+            if (fabs(bX) > 1e-7)
+            {
+                double bendVal = origY - bBoxMinB.y
+                    + (bendValue - 1) * findRamp * initialLength;
+                bendVal *= bX;
+
+                double scale = 1.0 / bX;
+                double bendPI = PI - bendVal;
+
+                double cosB = cos(bendPI);
+                double sinB = sin(bendPI);
+
+                double posX = scale * cosB + scale - origX * cosB;
+                double posY = scale * sinB - origX * sinB;
+
+                newX = origX + (posX - origX);
+                newY = origY + (posY + bBoxMinB.y
+                    - (bendValue - 1) * findRamp * initialLength - origY)
+                    * envTimesWeight;
+            }
         }
 
-        // --- Apply final deltas once, multiplied by envelope
-        pos->x = origX + deltaX * envTimesWeight;
-        pos->y = origY + deltaY * envTimesWeight;
-        pos->z = origZ + deltaZ * envTimesWeight;
+        // =====================================================================
+        // Bend Z
+        // =====================================================================
+        {
+            // --- inline soft blend for bendZ ---------------------------------
+            double a = fabs(bendZ);
+            double t = a / (a + 1e-4);     // smooth (0 → 1)
+            double bZ = bendZ * t;         // softened bendZ value
+            // ------------------------------------------------------------------
 
-        // --- Optional: snap tiny bends to zero to remove residual jitter ---
-        if (fabs(bendX) < EPSILON * 0.1 && fabs(bendZ) < EPSILON * 0.1) {
-            pos->x = origX;
-            pos->y = origY;
-            pos->z = origZ;
+            if (fabs(bZ) > 1e-7)
+            {
+                double bendVal = newY - bBoxMinB.y
+                    + (bendValue - 1) * findRamp * initialLength;
+                bendVal *= bZ;
+
+                double scale = 1.0 / bZ;
+                double bendPI = PI - bendVal;
+
+                double cosB = cos(bendPI);
+                double sinB = sin(bendPI);
+
+                double posZ = scale * cosB + scale - origZ * cosB;
+                double posY = scale * sinB - origZ * sinB;
+
+                newZ = origZ + (posZ - origZ);
+                newY = newY + (posY + bBoxMinB.y
+                    - (bendValue - 1) * findRamp * initialLength - newY)
+                    * envTimesWeight;
+            }
         }
 
+        // Final assignment
+        pos->x = newX;
+        pos->y = newY;
+        pos->z = newZ;
 
 
         //convert back to local space
